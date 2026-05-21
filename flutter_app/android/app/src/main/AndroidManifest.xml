@@ -1,19 +1,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
-    <!-- Android 12+ BLE permissions -->
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <!-- Android 12+ BLE + Classic permissions. We deliberately omit the
+         `neverForLocation` flag because Classic discovery (RFCOMM/SPP) infers
+         location and the flag would suppress those results. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Android 11 and lower BLE permissions -->
+    <!-- Legacy Bluetooth permissions (still consulted by Classic SPP on some
+         OEM ROMs even on Android 12+). -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
 
-    <!-- Needed for BLE scan discovery on Android 11 and lower -->
+    <!-- Required for both BLE discovery and Classic discovery on Android <= 11. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 
     <application
-        android:label="btcan_viewer"
+        android:label="BTCAN Viewer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

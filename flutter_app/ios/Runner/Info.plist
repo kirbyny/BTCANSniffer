@@ -27,9 +27,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>This app uses Bluetooth Low Energy to discover and connect to the BTCAN-SNIFFER device.</string>
+	<string>This app uses Bluetooth Low Energy to discover and connect to a VLinker MC OBD-II adapter.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>This app uses Bluetooth Low Energy to receive CAN bus data from the BTCAN-SNIFFER device.</string>
+	<string>This app uses Bluetooth Low Energy to receive CAN bus data from a VLinker MC OBD-II adapter.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

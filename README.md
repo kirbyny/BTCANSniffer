@@ -3,7 +3,13 @@
 This workspace contains:
 
 - `firmware/`: ESP-IDF app for ESP32-C6 that sniffs CAN traffic using TWAI on GPIO 20 (RX), auto-detects bitrate, attempts byte-order detection, and streams frames over BLE.
-- `flutter_app/`: Flutter BLE client to display per-ID rows, highlight changed bytes, capture frames, and export CSV.
+- `flutter_app/`: Flutter client that connects to a **VLinker MC** (or other
+  ELM327-based OBD-II adapter) over **Bluetooth LE or Classic SPP** to
+  display per-ID rows, highlight changed bytes, record captures to local log
+  files, and export them. BLE works on Android + iOS; Classic SPP is
+  Android-only (iOS doesn't allow non-MFi RFCOMM). See
+  [flutter_app/README.md](flutter_app/README.md) for details. The Flutter app
+  no longer requires the ESP32 firmware in this repo.
 
 ## Firmware (ESP32-C6)
 
