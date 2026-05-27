@@ -6,10 +6,30 @@ import 'package:flutter_blue_classic/flutter_blue_classic.dart' as fbc;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'models.dart';
 import 'transport.dart';
 
+class ScanPick {
+  const ScanPick({
+    required this.device,
+    required this.protocol,
+    required this.sendProbe,
+  });
+
+  final DiscoveredDevice device;
+  final CanProtocol protocol;
+  final bool sendProbe;
+}
+
 class ScanScreen extends StatefulWidget {
-  const ScanScreen({super.key});
+  const ScanScreen({
+    super.key,
+    this.initialProtocol,
+    this.initialSendProbe = true,
+  });
+
+  final CanProtocol? initialProtocol;
+  final bool initialSendProbe;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -25,6 +45,9 @@ class _ScanScreenState extends State<ScanScreen> {
   String _statusMsg = '';
   bool _onlyKnown = true;
   bool _permsRequested = false;
+
+  late CanProtocol _protocol = widget.initialProtocol ?? CanProtocol.presets.first;
+  late bool _sendProbe = widget.initialSendProbe;
 
   @override
   void initState() {
@@ -169,8 +192,67 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
+  Widget _settingsCard() {
+    return Card(
+      margin: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Session settings',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<CanProtocol>(
+              initialValue: _protocol,
+              decoration: const InputDecoration(
+                labelText: 'CAN format / bitrate',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: [
+                for (final p in CanProtocol.presets)
+                  DropdownMenuItem(
+                    value: p,
+                    child: Text(p.label, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (p) => p == null ? null : setState(() => _protocol = p),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _protocol.description,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Switch.adaptive(
+                  value: _sendProbe,
+                  onChanged: (v) => setState(() => _sendProbe = v),
+                ),
+                Expanded(
+                  child: Text(
+                    'Send 0100 probe to activate bus (required on most cars)',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _pick(DiscoveredDevice d) {
-    Navigator.of(context).pop(d);
+    Navigator.of(context).pop(ScanPick(
+      device: d,
+      protocol: _protocol,
+      sendProbe: _sendProbe,
+    ));
   }
 
   @override
@@ -200,8 +282,9 @@ class _ScanScreenState extends State<ScanScreen> {
       ),
       body: Column(
         children: [
+          _settingsCard(),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
             child: Row(
               children: [
                 Expanded(child: Text(_statusMsg)),

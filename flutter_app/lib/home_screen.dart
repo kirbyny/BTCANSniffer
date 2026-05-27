@@ -2,14 +2,19 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'bit_explorer_screen.dart';
+import 'bit_matrix_view.dart';
 import 'ble_transport.dart';
 import 'capture_log.dart';
 import 'log_browser_screen.dart';
 import 'models.dart';
 import 'scan_screen.dart';
+import 'sniffer_log_screen.dart';
 import 'spp_transport.dart';
 import 'transport.dart';
 import 'vlinker.dart';
+
+enum _ViewMode { tiles, matrix }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,9 +35,14 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showDiagnostics = false;
 
   final Map<int, CanRowModel> _rowsById = {};
+  final Map<int, BitTrace> _tracesById = {};
+  Timer? _matrixTicker;
+
   String _status = 'Disconnected';
   VlinkerState _state = VlinkerState.disconnected;
   CanProtocol _protocol = CanProtocol.presets.first;
+  bool _sendProbe = true;
+  _ViewMode _viewMode = _ViewMode.tiles;
 
   CaptureLogFile? _activeCapture;
   int _capturedThisSession = 0;
@@ -67,15 +77,26 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {});
       }
     });
+    // The matrix view's rolling window has to advance even with no new
+    // frames; tick all known traces at ~10 fps so they prune + notify.
+    _matrixTicker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      for (final t in _tracesById.values) {
+        t.tick();
+      }
+    });
   }
 
   @override
   void dispose() {
     _redrawTimer?.cancel();
+    _matrixTicker?.cancel();
     _frameSub?.cancel();
     _statusSub?.cancel();
     _stateSub?.cancel();
     _rawSub?.cancel();
+    for (final t in _tracesById.values) {
+      t.dispose();
+    }
     _activeCapture?.close();
     _link.dispose();
     super.dispose();
@@ -112,17 +133,40 @@ class _HomeScreenState extends State<HomeScreen> {
       _activeCapture!.writeFrame(frame);
       _capturedThisSession = _activeCapture!.frameCount;
     }
+
+    // Feed the shared bit-trace map that powers the matrix view and any
+    // open bit-explorer screens.
+    final trace = _tracesById.putIfAbsent(
+      frame.id,
+      () => BitTrace(frame.id, frame.dlc),
+    );
+    trace.addFrame(frame);
+
     _dirty = true;
   }
 
   Future<void> _scanAndConnect() async {
-    final picked = await Navigator.of(context).push<DiscoveredDevice>(
-      MaterialPageRoute(builder: (_) => const ScanScreen()),
+    final result = await Navigator.of(context).push<ScanPick>(
+      MaterialPageRoute(
+        builder: (_) => ScanScreen(
+          initialProtocol: _protocol,
+          initialSendProbe: _sendProbe,
+        ),
+      ),
     );
-    if (picked == null) {
+    if (result == null) {
       return;
     }
-    final transport = switch (picked) {
+    setState(() {
+      _protocol = result.protocol;
+      _sendProbe = result.sendProbe;
+    });
+    // Apply settings before connecting so the ELM init sequence uses the
+    // chosen protocol (setProtocol is a no-op on transport when not yet open).
+    _link.sendActivationProbe = result.sendProbe;
+    await _link.setProtocol(result.protocol);
+
+    final transport = switch (result.device) {
       BleDiscoveredDevice(:final device) => BleElmTransport(device),
       SppDiscoveredDevice(:final device) => SppElmTransport(device),
     };
@@ -134,6 +178,10 @@ class _HomeScreenState extends State<HomeScreen> {
       await _stopCapture();
     }
     await _link.disconnect();
+    for (final t in _tracesById.values) {
+      t.dispose();
+    }
+    _tracesById.clear();
     setState(() {
       _rowsById.clear();
     });
@@ -145,11 +193,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       await _link.startMonitor();
     }
-  }
-
-  Future<void> _setProtocol(CanProtocol p) async {
-    setState(() => _protocol = p);
-    await _link.setProtocol(p);
   }
 
   Future<void> _toggleCapture() async {
@@ -177,6 +220,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _clearLiveView() {
+    for (final t in _tracesById.values) {
+      t.dispose();
+    }
+    _tracesById.clear();
     setState(() {
       _rowsById.clear();
     });
@@ -299,6 +346,14 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(_showDiagnostics ? Icons.bug_report : Icons.bug_report_outlined),
           ),
           IconButton(
+            tooltip: 'Sniffer log',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SnifferLogScreen()),
+            ),
+            icon: const Icon(Icons.list_alt),
+          ),
+          IconButton(
             tooltip: 'Capture logs',
             onPressed: _openLogBrowser,
             icon: const Icon(Icons.folder_open),
@@ -313,7 +368,7 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -330,77 +385,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(width: 8),
                       Flexible(child: Text('· ${_link.connectedDeviceName}', overflow: TextOverflow.ellipsis)),
                     ],
+                    const Spacer(),
+                    Text(
+                      _protocol.label,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 4),
                 Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<CanProtocol>(
-                  initialValue: _protocol,
-                  decoration: const InputDecoration(
-                    labelText: 'CAN format / bitrate',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: [
-                    for (final p in CanProtocol.presets)
-                      DropdownMenuItem(
-                        value: p,
-                        child: Text(p.label, overflow: TextOverflow.ellipsis),
-                      ),
-                  ],
-                  onChanged: connected ? (p) => p == null ? null : _setProtocol(p) : null,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _protocol.description,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                Row(
-                  children: [
-                    Switch.adaptive(
-                      value: _link.sendActivationProbe,
-                      onChanged: (v) => setState(() => _link.sendActivationProbe = v),
-                    ),
-                    Expanded(
-                      child: Text(
-                        'Send 0100 probe to activate bus (required on most cars)',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: canMonitor ? _toggleMonitor : null,
-                      icon: Icon(isMonitoring ? Icons.pause : Icons.play_arrow),
-                      label: Text(isMonitoring ? 'Stop Monitor' : 'Start Monitor'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: connected ? _toggleCapture : null,
-                      icon: Icon(_activeCapture == null ? Icons.fiber_manual_record : Icons.stop_circle_outlined),
-                      label: Text(_activeCapture == null ? 'Record to Log' : 'Stop Recording'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _rowsById.isEmpty ? null : _clearLiveView,
-                      icon: const Icon(Icons.clear_all),
-                      label: const Text('Clear View'),
-                    ),
-                    if (_activeCapture != null)
-                      Chip(
-                        avatar: const Icon(Icons.circle, size: 12, color: Colors.red),
-                        label: Text('$_capturedThisSession frames'),
-                      ),
-                  ],
-                ),
               ],
             ),
           ),
+          _transportRow(canMonitor: canMonitor, isMonitoring: isMonitoring, connected: connected),
           if (_showDiagnostics) _buildDiagnostics(),
           const Divider(height: 1),
           Expanded(
@@ -410,19 +407,36 @@ class _HomeScreenState extends State<HomeScreen> {
                       padding: const EdgeInsets.all(24),
                       child: Text(
                         connected
-                            ? 'No frames yet. Pick a CAN format and tap Start Monitor.'
+                            ? 'No frames yet. Tap ▶ to start monitoring.'
                             : 'Tap the Bluetooth icon to scan for a VLinker MC adapter.',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ),
                   )
-                : ListView.builder(
+                : _viewMode == _ViewMode.matrix
+                    ? BitMatrixView(
+                        tracesById: _tracesById,
+                        windowMs: BitTrace.windowMs,
+                      )
+                    : ListView.builder(
                     itemCount: rows.length,
                     itemBuilder: (context, index) {
                       final row = rows[index];
                       return ListTile(
                         dense: true,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => BitExplorerScreen(
+                              link: _link,
+                              canId: row.id,
+                              canIdHex: row.idHex,
+                              dlc: row.dlc,
+                              existingTrace: _tracesById[row.id],
+                            ),
+                          ),
+                        ),
                         title: Row(
                           children: [
                             SizedBox(
@@ -447,8 +461,116 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
           ),
+          const Divider(height: 1),
+          _viewToggleBar(),
         ],
       ),
+    );
+  }
+
+  Widget _transportRow({
+    required bool canMonitor,
+    required bool isMonitoring,
+    required bool connected,
+  }) {
+    final recording = _activeCapture != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _TransportButton(
+            tooltip: isMonitoring ? 'Pause' : 'Start Monitor',
+            onPressed: canMonitor ? _toggleMonitor : null,
+            icon: isMonitoring ? Icons.pause : Icons.play_arrow,
+            iconColor: canMonitor
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).disabledColor,
+          ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _TransportButton(
+                tooltip: recording ? 'Stop recording' : 'Record to log',
+                onPressed: connected ? _toggleCapture : null,
+                icon: Icons.fiber_manual_record,
+                iconColor: recording
+                    ? Colors.red.shade600
+                    : (connected ? Colors.black87 : Theme.of(context).disabledColor),
+              ),
+              if (recording)
+                Text(
+                  '$_capturedThisSession',
+                  style: const TextStyle(fontSize: 11, color: Colors.red),
+                ),
+            ],
+          ),
+          _TransportButton(
+            tooltip: 'Clear view',
+            onPressed: _rowsById.isEmpty ? null : _clearLiveView,
+            icon: Icons.stop,
+            iconColor: _rowsById.isEmpty
+                ? Theme.of(context).disabledColor
+                : Colors.black87,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _viewToggleBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SegmentedButton<_ViewMode>(
+            segments: const [
+              ButtonSegment(
+                value: _ViewMode.tiles,
+                label: Text('Tiles'),
+                icon: Icon(Icons.view_list),
+              ),
+              ButtonSegment(
+                value: _ViewMode.matrix,
+                label: Text('Matrix'),
+                icon: Icon(Icons.grid_view),
+              ),
+            ],
+            selected: {_viewMode},
+            onSelectionChanged: (s) =>
+                setState(() => _viewMode = s.first),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TransportButton extends StatelessWidget {
+  const _TransportButton({
+    required this.icon,
+    required this.onPressed,
+    required this.tooltip,
+    required this.iconColor,
+  });
+
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final String tooltip;
+  final Color iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onPressed,
+      tooltip: tooltip,
+      iconSize: 40,
+      padding: const EdgeInsets.all(10),
+      style: IconButton.styleFrom(
+        shape: const CircleBorder(),
+      ),
+      icon: Icon(icon, color: onPressed == null ? null : iconColor),
     );
   }
 }
