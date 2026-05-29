@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 
@@ -38,7 +39,6 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<int, BitTrace> _tracesById = {};
   Timer? _matrixTicker;
 
-  String _status = 'Disconnected';
   VlinkerState _state = VlinkerState.disconnected;
   CanProtocol _protocol = CanProtocol.presets.first;
   bool _sendProbe = true;
@@ -53,9 +53,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Status messages are no longer rendered on the home screen (the state
+    // pill carries the high-level status). Forward them to logcat so they
+    // remain recoverable for debugging via `adb logcat -s btcan`.
     _statusSub = _link.statusMessages.listen((m) {
-      if (!mounted) return;
-      setState(() => _status = m);
+      developer.log(m, name: 'btcan.status');
     });
     _stateSub = _link.stateChanges.listen((s) {
       if (!mounted) return;
@@ -202,8 +204,8 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _activeCapture = f;
         _capturedThisSession = 0;
-        _status = 'Capturing to ${f.fileName}';
       });
+      developer.log('Capturing to ${f.fileName}', name: 'btcan.status');
     } else {
       await _stopCapture();
     }
@@ -215,8 +217,11 @@ class _HomeScreenState extends State<HomeScreen> {
     await cap.close();
     setState(() {
       _activeCapture = null;
-      _status = 'Capture saved: ${cap.fileName} (${cap.frameCount} frames)';
     });
+    developer.log(
+      'Capture saved: ${cap.fileName} (${cap.frameCount} frames)',
+      name: 'btcan.status',
+    );
   }
 
   void _clearLiveView() {
@@ -340,28 +345,56 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('BTCAN Viewer'),
         actions: [
-          IconButton(
-            tooltip: _showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics',
-            onPressed: () => setState(() => _showDiagnostics = !_showDiagnostics),
-            icon: Icon(_showDiagnostics ? Icons.bug_report : Icons.bug_report_outlined),
-          ),
-          IconButton(
-            tooltip: 'Sniffer log',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SnifferLogScreen()),
-            ),
-            icon: const Icon(Icons.list_alt),
-          ),
-          IconButton(
-            tooltip: 'Capture logs',
-            onPressed: _openLogBrowser,
-            icon: const Icon(Icons.folder_open),
-          ),
-          IconButton(
-            tooltip: connected ? 'Disconnect' : 'Connect',
-            onPressed: connected ? _disconnect : _scanAndConnect,
-            icon: Icon(connected ? Icons.bluetooth_disabled : Icons.bluetooth_searching),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            tooltip: 'Menu',
+            onSelected: (v) async {
+              switch (v) {
+                case 'connect':
+                  await _scanAndConnect();
+                  break;
+                case 'disconnect':
+                  await _disconnect();
+                  break;
+                case 'sniffer':
+                  if (!mounted) return;
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SnifferLogScreen()),
+                  );
+                  break;
+                case 'capture':
+                  await _openLogBrowser();
+                  break;
+                case 'diag':
+                  setState(() => _showDiagnostics = !_showDiagnostics);
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: connected ? 'disconnect' : 'connect',
+                child: _menuRow(
+                  connected ? Icons.bluetooth_disabled : Icons.bluetooth_searching,
+                  connected ? 'Disconnect' : 'Connect to VLinker',
+                ),
+              ),
+              PopupMenuItem(
+                value: 'sniffer',
+                child: _menuRow(Icons.list_alt, 'Sniffer log'),
+              ),
+              PopupMenuItem(
+                value: 'capture',
+                child: _menuRow(Icons.folder_open, 'Capture logs'),
+              ),
+              PopupMenuItem(
+                value: 'diag',
+                child: _menuRow(
+                  _showDiagnostics ? Icons.bug_report : Icons.bug_report_outlined,
+                  _showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics',
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -392,8 +425,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
@@ -430,10 +461,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           MaterialPageRoute(
                             builder: (_) => BitExplorerScreen(
                               link: _link,
-                              canId: row.id,
-                              canIdHex: row.idHex,
-                              dlc: row.dlc,
-                              existingTrace: _tracesById[row.id],
+                              tracesById: _tracesById,
+                              initialCanId: row.id,
                             ),
                           ),
                         ),
@@ -468,6 +497,16 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _menuRow(IconData icon, String label) {
+    return Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    );
+  }
+
   Widget _transportRow({
     required bool canMonitor,
     required bool isMonitoring,
@@ -494,9 +533,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 tooltip: recording ? 'Stop recording' : 'Record to log',
                 onPressed: connected ? _toggleCapture : null,
                 icon: Icons.fiber_manual_record,
-                iconColor: recording
-                    ? Colors.red.shade600
-                    : (connected ? Colors.black87 : Theme.of(context).disabledColor),
+                iconColor: Colors.red.shade600,
               ),
               if (recording)
                 Text(
