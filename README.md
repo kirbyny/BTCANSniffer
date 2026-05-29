@@ -142,8 +142,8 @@ is fine for sideloading but not for distribution.
 ## Reverse-engineering a signal
 
 1. Connect, hit ▶, watch the **Tile** view fill with IDs.
-2. Suspect an ID (e.g. one that updates every ~100 ms with one slowly-rising
-   byte). Tap it. → **Explorer** opens.
+2. Suspect an ID (e.g. looking for coolant temperature, find one that updates every ~100 ms with one slowly-rising
+   byte as vehicle warms up). Tap it. → **Explorer** opens.
 3. Flip the top toggle to **Bytes**. The slow-rising byte's graph stands out
    immediately versus its neighbors.
 4. Think it's a 2-byte value? Tap **🔗** to combine with the byte to the
