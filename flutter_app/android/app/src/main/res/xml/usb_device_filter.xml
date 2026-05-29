@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Common USB-serial chips found in ELM327 USB adapters.
+  Vendor / product IDs are expressed in decimal, per the Android docs.
+
+  FTDI       (0x0403 = 1027): FT232R/B (0x6001 = 24577), FT2232x (0x6010 = 24592),
+                              FT232H (0x6014 = 24596), FT-X (0x6015 = 24597)
+  CP210x     (0x10C4 = 4292): CP2102 (0xEA60 = 60000), CP2105 (0xEA70 = 60016)
+  PL2303     (0x067B = 1659): PL2303 (0x2303 = 8963)
+  WCH CH340/1(0x1A86 = 6790): CH340 (0x7523 = 29987), CH341 (0x5523 = 21795),
+                              CH9102 (0x55D4 = 21972)
+-->
+<resources>
+    <!-- FTDI -->
+    <usb-device vendor-id="1027" product-id="24577" />
+    <usb-device vendor-id="1027" product-id="24592" />
+    <usb-device vendor-id="1027" product-id="24596" />
+    <usb-device vendor-id="1027" product-id="24597" />
+
+    <!-- Silicon Labs CP210x -->
+    <usb-device vendor-id="4292" product-id="60000" />
+    <usb-device vendor-id="4292" product-id="60016" />
+
+    <!-- Prolific PL2303 -->
+    <usb-device vendor-id="1659" product-id="8963" />
+
+    <!-- WCH CH340 / CH341 / CH9102 -->
+    <usb-device vendor-id="6790" product-id="29987" />
+    <usb-device vendor-id="6790" product-id="21795" />
+    <usb-device vendor-id="6790" product-id="21972" />
+</resources>

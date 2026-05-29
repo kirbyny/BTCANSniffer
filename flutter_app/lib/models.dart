@@ -82,42 +82,69 @@ class CanProtocol {
     required this.code,
     required this.label,
     required this.description,
+    required this.bitrate,
+    required this.extended,
   });
 
+  /// ELM327 `ATSP <code>` mnemonic. `0` = auto. For slcan we ignore [code]
+  /// and use [bitrate] to pick the `Sn` index.
   final String code;
   final String label;
   final String description;
+
+  /// Bus rate in bits per second. `null` only for auto-detect.
+  final int? bitrate;
+
+  /// True for 29-bit identifier protocols.
+  final bool extended;
 
   static const List<CanProtocol> presets = [
     CanProtocol(
       code: '6',
       label: '11-bit · 500 kbps',
       description: 'ISO 15765-4 CAN (standard ID, 500 kbps) — most modern OBD-II vehicles',
+      bitrate: 500000,
+      extended: false,
     ),
     CanProtocol(
       code: '7',
       label: '29-bit · 500 kbps',
       description: 'ISO 15765-4 CAN (extended ID, 500 kbps)',
+      bitrate: 500000,
+      extended: true,
     ),
     CanProtocol(
       code: '8',
       label: '11-bit · 250 kbps',
       description: 'ISO 15765-4 CAN (standard ID, 250 kbps)',
+      bitrate: 250000,
+      extended: false,
     ),
     CanProtocol(
       code: '9',
       label: '29-bit · 250 kbps',
       description: 'ISO 15765-4 CAN (extended ID, 250 kbps)',
+      bitrate: 250000,
+      extended: true,
     ),
     CanProtocol(
       code: 'A',
       label: 'J1939 · 29-bit · 250 kbps',
       description: 'SAE J1939 (heavy-duty trucks, marine)',
+      bitrate: 250000,
+      extended: true,
     ),
     CanProtocol(
       code: '0',
       label: 'Auto-detect',
-      description: 'Let the ELM327 negotiate the protocol with the vehicle',
+      description: 'Let the ELM327 negotiate the protocol with the vehicle (ELM only)',
+      bitrate: null,
+      extended: false,
     ),
   ];
 }
+
+/// Which family of protocol the driver speaks over the byte transport.
+/// ELM327 = AT command set + ATMA frame stream (the OBD-II dongle world).
+/// slcan = Lawicel CAN-USB ASCII protocol — true passive raw-CAN sniffing.
+enum ProtocolFamily { elm327, slcan }

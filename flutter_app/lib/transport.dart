@@ -1,5 +1,6 @@
 import 'package:flutter_blue_classic/flutter_blue_classic.dart' as fbc;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
+import 'package:usb_serial/usb_serial.dart' as usb;
 
 /// Bytes-in / bytes-out pipe to an ELM327-compatible adapter. The protocol
 /// layer in [VlinkerConnection] (see lib/vlinker.dart) is identical regardless
@@ -59,6 +60,48 @@ class SppDiscoveredDevice extends DiscoveredDevice {
   String get address => device.address;
   @override
   bool get isBle => false;
+}
+
+class WifiDiscoveredDevice extends DiscoveredDevice {
+  WifiDiscoveredDevice({
+    required this.host,
+    required this.port,
+    this.label = 'WiFi ELM327',
+  });
+
+  final String host;
+  final int port;
+  final String label;
+
+  @override
+  String get name => label;
+  @override
+  String get address => '$host:$port';
+  @override
+  bool get isBle => false;
+}
+
+class UsbDiscoveredDevice extends DiscoveredDevice {
+  UsbDiscoveredDevice(this.device);
+  final usb.UsbDevice device;
+
+  @override
+  String get name {
+    final manuf = device.manufacturerName ?? '';
+    final prod = device.productName ?? '';
+    final raw = [manuf, prod].where((s) => s.isNotEmpty).join(' ').trim();
+    if (raw.isNotEmpty) return raw;
+    return 'USB ${_hex4(device.vid ?? 0)}:${_hex4(device.pid ?? 0)}';
+  }
+
+  @override
+  String get address =>
+      '${_hex4(device.vid ?? 0)}:${_hex4(device.pid ?? 0)} dev ${device.deviceId}';
+  @override
+  bool get isBle => false;
+
+  static String _hex4(int v) =>
+      v.toRadixString(16).toUpperCase().padLeft(4, '0');
 }
 
 /// Recognized advertised name fragments for VLinker / generic ELM327-over-BT

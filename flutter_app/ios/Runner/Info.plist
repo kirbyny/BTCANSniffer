@@ -30,6 +30,8 @@
 	<string>This app uses Bluetooth Low Energy to discover and connect to a VLinker MC OBD-II adapter.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app uses Bluetooth Low Energy to receive CAN bus data from a VLinker MC OBD-II adapter.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app connects to WiFi OBD-II adapters on the local network to receive CAN bus data.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

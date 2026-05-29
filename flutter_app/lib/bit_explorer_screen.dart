@@ -17,7 +17,7 @@ class BitExplorerScreen extends StatefulWidget {
     required this.initialCanId,
   });
 
-  final VlinkerConnection link;
+  final CanProtocolDriver link;
   final Map<int, BitTrace> tracesById;
   final int initialCanId;
 
@@ -116,7 +116,7 @@ class _BitExplorerPage extends StatefulWidget {
     required this.trace,
   });
 
-  final VlinkerConnection link;
+  final CanProtocolDriver link;
   final int canId;
   final String canIdHex;
   final int dlc;

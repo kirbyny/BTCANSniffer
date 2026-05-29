@@ -14,10 +14,37 @@ enum VlinkerState {
   error,
 }
 
+/// What every concrete CAN-protocol driver exposes to the rest of the app.
+/// VLinkerConnection (ELM327) and SlcanDriver both implement this so the
+/// home screen and explorer can stay protocol-agnostic.
+abstract interface class CanProtocolDriver {
+  Stream<CanFrame> get frames;
+  Stream<String> get statusMessages;
+  Stream<VlinkerState> get stateChanges;
+  Stream<String> get rawLines;
+
+  VlinkerState get state;
+  String? get connectedDeviceName;
+  CanProtocol get currentProtocol;
+  int get bytesReceived;
+
+  /// ELM-only: whether to send `0100` before `ATMA` to activate the bus.
+  /// Ignored by drivers where it doesn't apply (e.g. slcan).
+  bool get sendActivationProbe;
+  set sendActivationProbe(bool v);
+
+  Future<void> connect(ElmTransport transport);
+  Future<void> disconnect();
+  Future<void> startMonitor();
+  Future<void> stopMonitor();
+  Future<void> setProtocol(CanProtocol p);
+  Future<void> dispose();
+}
+
 /// Drives an ELM327-compatible OBD-II adapter (VLinker MC, MC+, etc.) over an
-/// [ElmTransport] (BLE or Classic SPP) and parses streamed CAN frames produced
-/// by the `ATMA` (monitor all) command.
-class VlinkerConnection {
+/// [ElmTransport] (BLE / Classic SPP / WiFi / USB) and parses streamed CAN
+/// frames produced by the `ATMA` (monitor all) command.
+class VlinkerConnection implements CanProtocolDriver {
   VlinkerConnection();
 
   final _frameController = StreamController<CanFrame>.broadcast();
@@ -25,15 +52,20 @@ class VlinkerConnection {
   final _stateController = StreamController<VlinkerState>.broadcast();
   final _rawLineController = StreamController<String>.broadcast();
 
+  @override
   Stream<CanFrame> get frames => _frameController.stream;
+  @override
   Stream<String> get statusMessages => _statusController.stream;
+  @override
   Stream<VlinkerState> get stateChanges => _stateController.stream;
 
   /// Every non-empty line received from the adapter, including ELM control
   /// tokens like `OK`, `>`, `NO DATA`, etc. Useful for the diagnostics panel.
+  @override
   Stream<String> get rawLines => _rawLineController.stream;
 
   /// Total raw bytes received from the adapter since the transport opened.
+  @override
   int bytesReceived = 0;
 
   /// When true (default), startMonitor sends a single `0100` (request
@@ -41,9 +73,11 @@ class VlinkerConnection {
   /// after `ATSP <n>` — without a probe, ATMA returns nothing. The probe is
   /// a standard OBD-II diagnostic query, not arbitrary frame injection, but
   /// it is technically a transmission. Set to false for strict passive use.
+  @override
   bool sendActivationProbe = true;
 
   VlinkerState _state = VlinkerState.disconnected;
+  @override
   VlinkerState get state => _state;
 
   ElmTransport? _transport;
@@ -53,6 +87,7 @@ class VlinkerConnection {
   String _rxBuffer = '';
   bool _monitoring = false;
   CanProtocol _currentProtocol = CanProtocol.presets.first;
+  @override
   CanProtocol get currentProtocol => _currentProtocol;
 
   // Serializes AT command writes and waits for the '>' prompt.
@@ -63,6 +98,7 @@ class VlinkerConnection {
   // stream so silent failures (wrong bitrate, BUS BUSY, etc.) become visible.
   int _unparsedReports = 0;
 
+  @override
   String? get connectedDeviceName => _transport?.name;
 
   void _setState(VlinkerState s) {
@@ -74,6 +110,7 @@ class VlinkerConnection {
     _statusController.add(msg);
   }
 
+  @override
   Future<void> connect(ElmTransport transport) async {
     _setState(VlinkerState.connecting);
     _emitStatus('Connecting to ${transport.name}...');
@@ -104,6 +141,7 @@ class VlinkerConnection {
     }
   }
 
+  @override
   Future<void> disconnect() async {
     if (_monitoring) {
       try {
@@ -139,6 +177,7 @@ class VlinkerConnection {
     await _sendAt('ATSP${_currentProtocol.code}');
   }
 
+  @override
   Future<void> setProtocol(CanProtocol protocol) async {
     if (_monitoring) {
       await stopMonitor();
@@ -151,6 +190,7 @@ class VlinkerConnection {
     _emitStatus('Protocol set to ${protocol.label}');
   }
 
+  @override
   Future<void> startMonitor() async {
     if (_transport == null || _monitoring) {
       return;
@@ -171,6 +211,7 @@ class VlinkerConnection {
     await _writeRaw('ATMA\r');
   }
 
+  @override
   Future<void> stopMonitor() async {
     if (!_monitoring) {
       return;
@@ -334,6 +375,7 @@ class VlinkerConnection {
     );
   }
 
+  @override
   Future<void> dispose() async {
     await _inSub?.cancel();
     await _discSub?.cancel();

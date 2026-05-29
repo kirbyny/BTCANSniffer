@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_classic/flutter_blue_classic.dart' as fbc;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:usb_serial/usb_serial.dart' as usb;
 
 import 'models.dart';
 import 'transport.dart';
@@ -14,11 +15,13 @@ class ScanPick {
     required this.device,
     required this.protocol,
     required this.sendProbe,
+    required this.family,
   });
 
   final DiscoveredDevice device;
   final CanProtocol protocol;
   final bool sendProbe;
+  final ProtocolFamily family;
 }
 
 class ScanScreen extends StatefulWidget {
@@ -26,10 +29,12 @@ class ScanScreen extends StatefulWidget {
     super.key,
     this.initialProtocol,
     this.initialSendProbe = true,
+    this.initialFamily = ProtocolFamily.elm327,
   });
 
   final CanProtocol? initialProtocol;
   final bool initialSendProbe;
+  final ProtocolFamily initialFamily;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -48,6 +53,12 @@ class _ScanScreenState extends State<ScanScreen> {
 
   late CanProtocol _protocol = widget.initialProtocol ?? CanProtocol.presets.first;
   late bool _sendProbe = widget.initialSendProbe;
+  late ProtocolFamily _family = widget.initialFamily;
+
+  // Last-used WiFi target persists across re-entries to the scan screen
+  // within the app's lifetime.
+  static String _lastWifiHost = '192.168.0.10';
+  static int _lastWifiPort = 35000;
 
   @override
   void initState() {
@@ -99,6 +110,7 @@ class _ScanScreenState extends State<ScanScreen> {
     });
 
     await _loadBondedClassicDevices();
+    await _loadUsbDevices();
     await _startBleScan();
     if (Platform.isAndroid) {
       await _startClassicDiscovery();
@@ -139,6 +151,25 @@ class _ScanScreenState extends State<ScanScreen> {
       if (mounted) setState(() {});
     } catch (_) {
       // Older devices / missing permissions just yield no bonded results.
+    }
+  }
+
+  /// Enumerate attached USB-OTG serial devices. The chips listed in
+  /// `usb_device_filter.xml` are nearly always ELM-compatible OBD-II
+  /// adapters, so we don't apply the name-hint filter here — if a known
+  /// serial chip is attached, the user probably wants to use it.
+  Future<void> _loadUsbDevices() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    try {
+      final attached = await usb.UsbSerial.listDevices();
+      for (final d in attached) {
+        _devices['usb:${d.deviceId}'] = UsbDiscoveredDevice(d);
+      }
+      if (mounted) setState(() {});
+    } catch (_) {
+      // No USB host capability / no devices — silent.
     }
   }
 
@@ -193,6 +224,17 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Widget _settingsCard() {
+    final isSlcan = _family == ProtocolFamily.slcan;
+    final showProbe = !isSlcan;
+    // Auto-detect only applies to ELM327. Filter it out for slcan.
+    final formats = isSlcan
+        ? CanProtocol.presets.where((p) => p.bitrate != null).toList()
+        : CanProtocol.presets;
+    // If the user switches to slcan while "Auto" was selected, snap to a
+    // sensible default rather than render a broken state.
+    if (isSlcan && _protocol.bitrate == null) {
+      _protocol = formats.first;
+    }
     return Card(
       margin: const EdgeInsets.fromLTRB(10, 10, 10, 0),
       child: Padding(
@@ -205,6 +247,33 @@ class _ScanScreenState extends State<ScanScreen> {
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 8),
+            Center(
+              child: SegmentedButton<ProtocolFamily>(
+                segments: const [
+                  ButtonSegment(
+                    value: ProtocolFamily.elm327,
+                    label: Text('ELM327'),
+                    icon: Icon(Icons.directions_car),
+                  ),
+                  ButtonSegment(
+                    value: ProtocolFamily.slcan,
+                    label: Text('slcan'),
+                    icon: Icon(Icons.memory),
+                  ),
+                ],
+                selected: {_family},
+                onSelectionChanged: (s) => setState(() => _family = s.first),
+                showSelectedIcon: false,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              isSlcan
+                  ? 'Raw CAN sniffer over slcan (CANable, Innomaker, etc.) — listen-only, no bus transmissions.'
+                  : 'OBD-II adapter speaking ELM327 AT commands (VLinker MC, generic dongles).',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
             DropdownButtonFormField<CanProtocol>(
               initialValue: _protocol,
               decoration: const InputDecoration(
@@ -213,7 +282,7 @@ class _ScanScreenState extends State<ScanScreen> {
                 isDense: true,
               ),
               items: [
-                for (final p in CanProtocol.presets)
+                for (final p in formats)
                   DropdownMenuItem(
                     value: p,
                     child: Text(p.label, overflow: TextOverflow.ellipsis),
@@ -226,21 +295,23 @@ class _ScanScreenState extends State<ScanScreen> {
               _protocol.description,
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Switch.adaptive(
-                  value: _sendProbe,
-                  onChanged: (v) => setState(() => _sendProbe = v),
-                ),
-                Expanded(
-                  child: Text(
-                    'Send 0100 probe to activate bus (required on most cars)',
-                    style: Theme.of(context).textTheme.bodySmall,
+            if (showProbe) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Switch.adaptive(
+                    value: _sendProbe,
+                    onChanged: (v) => setState(() => _sendProbe = v),
                   ),
-                ),
-              ],
-            ),
+                  Expanded(
+                    child: Text(
+                      'Send 0100 probe to activate bus (required on most cars)',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -252,7 +323,70 @@ class _ScanScreenState extends State<ScanScreen> {
       device: d,
       protocol: _protocol,
       sendProbe: _sendProbe,
+      family: _family,
     ));
+  }
+
+  Future<void> _enterWifi() async {
+    final hostCtrl = TextEditingController(text: _lastWifiHost);
+    final portCtrl = TextEditingController(text: _lastWifiPort.toString());
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('WiFi ELM adapter'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Connect to a WiFi OBD-II dongle (the phone must be on the '
+              'dongle\'s SoftAP — usually OBDII / WiFi-OBD).',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: hostCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Host',
+                hintText: '192.168.0.10',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: portCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Port',
+                hintText: '35000',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Connect'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || ok != true) return;
+    final host = hostCtrl.text.trim();
+    final port = int.tryParse(portCtrl.text.trim()) ?? 35000;
+    if (host.isEmpty) return;
+    _lastWifiHost = host;
+    _lastWifiPort = port;
+    _pick(WifiDiscoveredDevice(host: host, port: port));
   }
 
   @override
@@ -271,7 +405,7 @@ class _ScanScreenState extends State<ScanScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Select VLinker'),
+        title: const Text('Select Connection'),
         actions: [
           IconButton(
             onPressed: _isScanning ? null : _startScan,
@@ -298,27 +432,29 @@ class _ScanScreenState extends State<ScanScreen> {
           ),
           if (_isScanning) const LinearProgressIndicator(),
           Expanded(
-            child: sorted.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        _isScanning
-                            ? 'Scanning for nearby Bluetooth devices...'
-                            : 'Tap the refresh icon to scan again. Classic SPP adapters must be paired in Android Bluetooth settings first.',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+            child: ListView.separated(
+              itemCount: sorted.length + 1,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                if (i == 0) {
+                  return ListTile(
+                    leading: const Icon(Icons.wifi, color: Color(0xFF2563EB)),
+                    title: const Text('Connect over WiFi…'),
+                    subtitle: Text(
+                      'Last: $_lastWifiHost:$_lastWifiPort',
+                      style: const TextStyle(fontSize: 11),
                     ),
-                  )
-                : ListView.separated(
-                    itemCount: sorted.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, i) => _DeviceTile(
-                      device: sorted[i],
-                      onTap: () => _pick(sorted[i]),
+                    trailing: const _Badge(
+                      label: 'WiFi',
+                      color: Color(0xFF2563EB),
                     ),
-                  ),
+                    onTap: _enterWifi,
+                  );
+                }
+                final d = sorted[i - 1];
+                return _DeviceTile(device: d, onTap: () => _pick(d));
+              },
+            ),
           ),
         ],
       ),
@@ -337,24 +473,37 @@ class _DeviceTile extends StatelessWidget {
     final likely = isLikelyVlinker(device.name);
     final iconColor = likely ? Theme.of(context).colorScheme.primary : null;
 
-    String subtitle;
-    if (device is BleDiscoveredDevice) {
-      subtitle = 'BLE  ·  ${device.address}  ·  RSSI ${(device as BleDiscoveredDevice).rssi}';
-    } else {
-      final s = device as SppDiscoveredDevice;
-      subtitle = 'Classic SPP  ·  ${device.address}${s.bonded ? '  ·  paired' : ''}';
-    }
+    final (subtitle, badge, leadingIcon) = switch (device) {
+      BleDiscoveredDevice(:final rssi) => (
+        'BLE  ·  ${device.address}  ·  RSSI $rssi',
+        const _Badge(label: 'BLE'),
+        Icons.bluetooth,
+      ),
+      SppDiscoveredDevice(:final bonded) => (
+        'Classic SPP  ·  ${device.address}${bonded ? '  ·  paired' : ''}',
+        const _Badge(label: 'SPP', color: Color(0xFF1A8A5A)),
+        Icons.bluetooth_audio,
+      ),
+      WifiDiscoveredDevice() => (
+        'TCP  ·  ${device.address}',
+        const _Badge(label: 'WiFi', color: Color(0xFF2563EB)),
+        Icons.wifi,
+      ),
+      UsbDiscoveredDevice() => (
+        'USB serial  ·  ${device.address}',
+        const _Badge(label: 'USB', color: Color(0xFFB45309)),
+        Icons.usb,
+      ),
+    };
 
     return ListTile(
       leading: Icon(
-        likely ? Icons.directions_car : (device.isBle ? Icons.bluetooth : Icons.bluetooth_audio),
+        likely ? Icons.directions_car : leadingIcon,
         color: iconColor,
       ),
       title: Text(device.name),
       subtitle: Text(subtitle),
-      trailing: device.isBle
-          ? const _Badge(label: 'BLE')
-          : const _Badge(label: 'SPP', color: Color(0xFF1A8A5A)),
+      trailing: badge,
       onTap: onTap,
     );
   }

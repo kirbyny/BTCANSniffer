@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'bit_explorer_screen.dart';
 import 'bit_matrix_view.dart';
 import 'ble_transport.dart';
+import 'slcan_driver.dart';
+import 'usb_transport.dart';
+import 'wifi_transport.dart';
 import 'capture_log.dart';
 import 'log_browser_screen.dart';
 import 'models.dart';
@@ -25,7 +28,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final VlinkerConnection _link = VlinkerConnection();
+  CanProtocolDriver _link = VlinkerConnection();
+  ProtocolFamily _currentFamily = ProtocolFamily.elm327;
 
   StreamSubscription<CanFrame>? _frameSub;
   StreamSubscription<String>? _statusSub;
@@ -56,21 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Status messages are no longer rendered on the home screen (the state
     // pill carries the high-level status). Forward them to logcat so they
     // remain recoverable for debugging via `adb logcat -s btcan`.
-    _statusSub = _link.statusMessages.listen((m) {
-      developer.log(m, name: 'btcan.status');
-    });
-    _stateSub = _link.stateChanges.listen((s) {
-      if (!mounted) return;
-      setState(() => _state = s);
-    });
-    _frameSub = _link.frames.listen(_onFrame);
-    _rawSub = _link.rawLines.listen((line) {
-      _recentRaw.add(line);
-      while (_recentRaw.length > 30) {
-        _recentRaw.removeAt(0);
-      }
-      _dirty = true;
-    });
+    _wireDriverSubscriptions();
 
     // Coalesce UI updates so heavy bus traffic doesn't peg the framework.
     _redrawTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
@@ -153,6 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => ScanScreen(
           initialProtocol: _protocol,
           initialSendProbe: _sendProbe,
+          initialFamily: _currentFamily,
         ),
       ),
     );
@@ -163,16 +154,52 @@ class _HomeScreenState extends State<HomeScreen> {
       _protocol = result.protocol;
       _sendProbe = result.sendProbe;
     });
-    // Apply settings before connecting so the ELM init sequence uses the
-    // chosen protocol (setProtocol is a no-op on transport when not yet open).
+
+    // Swap to the right driver if the user picked a different family.
+    final wantSlcan = result.family == ProtocolFamily.slcan;
+    final haveSlcan = _link is SlcanDriver;
+    if (wantSlcan != haveSlcan) {
+      await _frameSub?.cancel();
+      await _statusSub?.cancel();
+      await _stateSub?.cancel();
+      await _rawSub?.cancel();
+      await _link.dispose();
+      _link = wantSlcan ? SlcanDriver() : VlinkerConnection();
+      _currentFamily = result.family;
+      _wireDriverSubscriptions();
+    }
+
+    // Apply settings before connecting so init uses the chosen protocol
+    // (setProtocol is a no-op on transport when not yet open).
     _link.sendActivationProbe = result.sendProbe;
     await _link.setProtocol(result.protocol);
 
     final transport = switch (result.device) {
       BleDiscoveredDevice(:final device) => BleElmTransport(device),
       SppDiscoveredDevice(:final device) => SppElmTransport(device),
+      WifiDiscoveredDevice(:final host, :final port) =>
+        WifiElmTransport(host: host, port: port),
+      UsbDiscoveredDevice(:final device) => UsbSerialElmTransport(device),
     };
     await _link.connect(transport);
+  }
+
+  void _wireDriverSubscriptions() {
+    _statusSub = _link.statusMessages.listen((m) {
+      developer.log(m, name: 'btcan.status');
+    });
+    _stateSub = _link.stateChanges.listen((s) {
+      if (!mounted) return;
+      setState(() => _state = s);
+    });
+    _frameSub = _link.frames.listen(_onFrame);
+    _rawSub = _link.rawLines.listen((line) {
+      _recentRaw.add(line);
+      while (_recentRaw.length > 30) {
+        _recentRaw.removeAt(0);
+      }
+      _dirty = true;
+    });
   }
 
   Future<void> _disconnect() async {
@@ -376,7 +403,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 value: connected ? 'disconnect' : 'connect',
                 child: _menuRow(
                   connected ? Icons.bluetooth_disabled : Icons.bluetooth_searching,
-                  connected ? 'Disconnect' : 'Connect to VLinker',
+                  connected ? 'Disconnect' : 'Connect',
                 ),
               ),
               PopupMenuItem(
@@ -439,7 +466,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Text(
                         connected
                             ? 'No frames yet. Tap ▶ to start monitoring.'
-                            : 'Tap the Bluetooth icon to scan for a VLinker MC adapter.',
+                            : 'Tap ☰ → Connect to choose an adapter.',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
