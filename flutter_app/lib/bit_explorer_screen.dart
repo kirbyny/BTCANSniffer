@@ -382,7 +382,10 @@ class _BitExplorerPageState extends State<_BitExplorerPage> {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       color: beyondDlc ? Colors.grey.shade100 : null,
-      child: Padding(
+      child: InkWell(
+        onDoubleTap: () => _saveByteSignal(g),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 8, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -463,6 +466,158 @@ class _BitExplorerPageState extends State<_BitExplorerPage> {
             ),
           ],
         ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveByteSignal(_ByteGroup g) async {
+    final nameCtrl = TextEditingController();
+    final scaleCtrl = TextEditingController(text: '1.0');
+    final offsetCtrl = TextEditingController(text: '0.0');
+    final unitCtrl = TextEditingController();
+    var signed = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            return AlertDialog(
+              title: const Text('Save signal'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'ID ${widget.canIdHex} · ${g.label}',
+                      style:
+                          const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: nameCtrl,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Signal name',
+                        hintText: 'e.g. EngineCoolantTemp',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: scaleCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Scale',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                                signed: true, decimal: true),
+                            onChanged: (_) => setSt(() {}),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: offsetCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Offset',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                                signed: true, decimal: true),
+                            onChanged: (_) => setSt(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: unitCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Unit',
+                              hintText: '°C, V, rpm…',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            onChanged: (_) => setSt(() {}),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Checkbox(
+                              value: signed,
+                              onChanged: (v) =>
+                                  setSt(() => signed = v ?? false),
+                            ),
+                            const Text('Signed'),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _SignalPreview(
+                      trace: _trace,
+                      group: g,
+                      signed: signed,
+                      scaleText: scaleCtrl.text,
+                      offsetText: offsetCtrl.text,
+                      unit: unitCtrl.text,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (!mounted || saved != true) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) return;
+    final scale = double.tryParse(scaleCtrl.text.trim()) ?? 1.0;
+    final offset = double.tryParse(offsetCtrl.text.trim()) ?? 0.0;
+    await SnifferLog.append(SnifferEntry(
+      timestamp: DateTime.now(),
+      idHex: widget.canIdHex,
+      byteIndex: g.startByte,
+      bitmask: 0,
+      signalName: name,
+      length: g.length,
+      littleEndian: g.littleEndian,
+      signed: signed,
+      scale: scale,
+      offset: offset,
+      unit: unitCtrl.text.trim(),
+    ));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Saved "$name" to sniffer log'),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -784,6 +939,96 @@ class BitGraphPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Live "raw bytes → decoded value" preview for the Save Signal dialog.
+/// Listens to the trace so it ticks at the same ~10 fps as the explorer
+/// graphs, which lets the user dial in scale/offset while watching the
+/// number snap to the value they expect on the dashboard.
+class _SignalPreview extends StatelessWidget {
+  const _SignalPreview({
+    required this.trace,
+    required this.group,
+    required this.signed,
+    required this.scaleText,
+    required this.offsetText,
+    required this.unit,
+  });
+
+  final BitTrace trace;
+  final _ByteGroup group;
+  final bool signed;
+  final String scaleText;
+  final String offsetText;
+  final String unit;
+
+  int _interpretRaw(int raw) {
+    if (!signed) return raw;
+    final bits = group.length * 8;
+    if (bits <= 0 || bits >= 63) return raw;
+    final signBit = 1 << (bits - 1);
+    if ((raw & signBit) != 0) return raw - (1 << bits);
+    return raw;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: trace,
+      builder: (_, __) {
+        final latest = trace.latestData();
+        final rawBytes = <int>[];
+        if (latest != null) {
+          for (var i = 0; i < group.length; i++) {
+            final idx = group.startByte + i;
+            if (idx < latest.length) rawBytes.add(latest[idx]);
+          }
+        }
+        final raw = latest == null ? 0 : group.extract(latest);
+        final asNumber = _interpretRaw(raw);
+        final scale = double.tryParse(scaleText.trim()) ?? 1.0;
+        final offset = double.tryParse(offsetText.trim()) ?? 0.0;
+        final decoded = asNumber * scale + offset;
+        final hexBytes = rawBytes
+            .map((b) => '0x${b.toRadixString(16).padLeft(2, '0').toUpperCase()}')
+            .join(' ');
+        final unitStr = unit.trim();
+        return Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF7F2),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                latest == null
+                    ? 'Raw bytes: (waiting for data…)'
+                    : 'Raw bytes: $hexBytes  (${group.littleEndian ? "LE" : "BE"})',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'as ${signed ? "int" : "uint"}${group.length * 8}: $asNumber',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'decoded: ${decoded.toStringAsFixed(decoded.abs() >= 100 ? 1 : 2)}'
+                '${unitStr.isEmpty ? '' : ' $unitStr'}',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// Thin horizontal bar showing `value` as a fraction of `maxValue`. Used as

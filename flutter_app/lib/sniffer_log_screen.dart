@@ -34,13 +34,51 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
       '0x${m.toRadixString(16).padLeft(2, '0').toUpperCase()}';
   String _maskBin(int m) => m.toRadixString(2).padLeft(8, '0');
 
+  String _subtitleFor(SnifferEntry e) {
+    if (e.isBitSignal) {
+      return 'bit · ID ${e.idHex}  ·  byte ${e.byteIndex}  ·  '
+          'mask ${_maskHex(e.bitmask)} (${_maskBin(e.bitmask)})';
+    }
+    final lenLabel = e.length == 1
+        ? '1 byte'
+        : '${e.length} bytes ${e.littleEndian ? 'LE' : 'BE'}';
+    final type = e.signed ? 'int' : 'uint';
+    final scaleStr = e.scale == 1.0 ? '' : ' × ${e.scale}';
+    final offsetStr = e.offset == 0.0
+        ? ''
+        : (e.offset > 0 ? ' + ${e.offset}' : ' − ${e.offset.abs()}');
+    final unitStr = e.unit.isEmpty ? '' : ' ${e.unit}';
+    return '$type${e.length * 8} · ID ${e.idHex}  ·  byte ${e.byteIndex} '
+        '($lenLabel)$scaleStr$offsetStr$unitStr';
+  }
+
   Future<void> _editEntry(int displayIndex) async {
     final e = _entries[displayIndex];
+    final result = e.isBitSignal
+        ? await _editBitDialog(e)
+        : await _editByteDialog(e);
+    if (!mounted || result == null) return;
+
+    if (result.delete) {
+      final confirmed = await _confirmDelete(e);
+      if (!mounted || confirmed != true) return;
+      await SnifferLog.deleteAt(displayIndex);
+      await _load();
+      return;
+    }
+
+    if (result.replacement != null) {
+      await SnifferLog.updateAt(displayIndex, result.replacement!);
+      await _load();
+    }
+  }
+
+  Future<_EditResult?> _editBitDialog(SnifferEntry e) async {
     final controller = TextEditingController(text: e.signalName);
-    final action = await showDialog<_EditAction>(
+    return showDialog<_EditResult>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Edit signal'),
+        title: const Text('Edit bit signal'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -57,46 +95,189 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
                 labelText: 'Signal name',
                 border: OutlineInputBorder(),
               ),
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => Navigator.pop(ctx, _EditAction.save),
+              onSubmitted: (_) => Navigator.pop(
+                ctx,
+                _EditResult.save(e.copyWith(signalName: controller.text.trim())),
+              ),
             ),
           ],
         ),
         actionsPadding: const EdgeInsets.fromLTRB(8, 0, 16, 8),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, _EditAction.delete),
+            onPressed: () => Navigator.pop(ctx, const _EditResult.delete()),
             style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
             child: const Text('Delete'),
           ),
           const Spacer(),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, _EditAction.cancel),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, _EditAction.save),
+            onPressed: () {
+              final n = controller.text.trim();
+              Navigator.pop(
+                ctx,
+                _EditResult.save(e.copyWith(signalName: n.isEmpty ? e.signalName : n)),
+              );
+            },
             child: const Text('Save'),
           ),
         ],
       ),
     );
-    if (!mounted || action == null || action == _EditAction.cancel) return;
+  }
 
-    if (action == _EditAction.delete) {
-      final confirmed = await _confirmDelete(e);
-      if (!mounted || confirmed != true) return;
-      await SnifferLog.deleteAt(displayIndex);
-      await _load();
-      return;
-    }
+  Future<_EditResult?> _editByteDialog(SnifferEntry e) async {
+    final nameCtrl = TextEditingController(text: e.signalName);
+    final scaleCtrl = TextEditingController(text: e.scale.toString());
+    final offsetCtrl = TextEditingController(text: e.offset.toString());
+    final unitCtrl = TextEditingController(text: e.unit);
+    var signed = e.signed;
+    var littleEndian = e.littleEndian;
 
-    final newName = controller.text.trim();
-    if (newName.isEmpty || newName == e.signalName) {
-      return;
-    }
-    await SnifferLog.updateAt(displayIndex, e.copyWith(signalName: newName));
-    await _load();
+    return showDialog<_EditResult>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setSt) {
+          return AlertDialog(
+            title: const Text('Edit byte signal'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ID ${e.idHex} · byte ${e.byteIndex} · ${e.length} byte${e.length == 1 ? '' : 's'}',
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameCtrl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Signal name',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: scaleCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Scale',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                                  signed: true, decimal: true),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: offsetCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Offset',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                                  signed: true, decimal: true),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: unitCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Unit',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: signed,
+                            onChanged: (v) =>
+                                setSt(() => signed = v ?? false),
+                          ),
+                          const Text('Signed'),
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (e.length > 1)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('Byte order: '),
+                        SegmentedButton<bool>(
+                          segments: const [
+                            ButtonSegment(value: true, label: Text('LE')),
+                            ButtonSegment(value: false, label: Text('BE')),
+                          ],
+                          selected: {littleEndian},
+                          onSelectionChanged: (s) =>
+                              setSt(() => littleEndian = s.first),
+                          showSelectedIcon: false,
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(8, 0, 16, 8),
+            actions: [
+              TextButton(
+                onPressed: () =>
+                    Navigator.pop(ctx, const _EditResult.delete()),
+                style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+                child: const Text('Delete'),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final n = nameCtrl.text.trim();
+                  final s = double.tryParse(scaleCtrl.text.trim()) ?? e.scale;
+                  final o = double.tryParse(offsetCtrl.text.trim()) ?? e.offset;
+                  Navigator.pop(
+                    ctx,
+                    _EditResult.save(e.copyWith(
+                      signalName: n.isEmpty ? e.signalName : n,
+                      scale: s,
+                      offset: o,
+                      unit: unitCtrl.text.trim(),
+                      signed: signed,
+                      littleEndian: littleEndian,
+                    )),
+                  );
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        });
+      },
+    );
   }
 
   Future<bool?> _confirmDelete(SnifferEntry e) async {
@@ -104,8 +285,7 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete signal?'),
-        content: Text('"${e.signalName}" — ID ${e.idHex} byte ${e.byteIndex} '
-            'mask ${_maskHex(e.bitmask)}'),
+        content: Text('"${e.signalName}" — ID ${e.idHex} byte ${e.byteIndex}'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -210,6 +390,23 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
     );
   }
 
+  Widget _typeBadge(SnifferEntry e) {
+    final isByte = e.isByteSignal;
+    final c = isByte ? Colors.indigo : Colors.teal;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: c.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        isByte ? 'BYTE' : 'BIT',
+        style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -236,8 +433,8 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
                     padding: EdgeInsets.all(24),
                     child: Text(
                       'No signals saved yet.\n\n'
-                      'Open the bit explorer for any CAN ID, watch the bit graphs, '
-                      'and double-tap a bit you want to name.',
+                      'Open the explorer for any CAN ID and double-tap '
+                      '— a bit lane in Bits mode, or a byte card in Bytes mode.',
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -250,13 +447,22 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
                     return ListTile(
                       dense: true,
                       onTap: () => _editEntry(i),
-                      title: Text(
-                        e.signalName,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              e.signalName,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _typeBadge(e),
+                        ],
                       ),
                       subtitle: Text(
-                        'ID ${e.idHex}  ·  byte ${e.byteIndex}  ·  '
-                        'mask ${_maskHex(e.bitmask)} (${_maskBin(e.bitmask)})',
+                        _subtitleFor(e),
                         style: const TextStyle(fontFamily: 'monospace'),
                       ),
                       trailing: Text(
@@ -271,4 +477,12 @@ class _SnifferLogScreenState extends State<SnifferLogScreen> {
   }
 }
 
-enum _EditAction { save, delete, cancel }
+class _EditResult {
+  const _EditResult.save(this.replacement) : delete = false;
+  const _EditResult.delete()
+      : replacement = null,
+        delete = true;
+
+  final SnifferEntry? replacement;
+  final bool delete;
+}
